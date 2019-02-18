@@ -6,3 +6,6 @@
 
 # the template
 templates/*
+
+# the work directory
+work/*
