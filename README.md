@@ -27,11 +27,10 @@ These will need to be edited and adjusted, the start of the items to be configur
 These requires a configuration file, the default location of the configuration file is **/etc/bao/<script-name.cfg>** or use the **-C** flag to override the default configuration file.
 
 # Returning values
-The script will return a **0** if the check passed and **2** if it failed. And the text disable will always starts with either **OK** or **CRITICAL**, I understand that there could be other possibilities, such the script fails to reach the check part of the script by I decided to handles this as and **CRITICAL** error.
+The script will return a **0** if the check passed and **2** if it failed. And the text displayed will always starts with either **OK** or **CRITICAL**, I understand that there could be other possibilities, such as the script fails to reach the check part, but I decided to handles this as and **CRITICAL** error as well and more information will be logged.
 
-* Logging
-Each script will write to a log file **/var/log/<script-name>.log**, it will rely on **logrotate** to rotate it log file. The name and location of the log file can be adjusted on your need, it part of the configurable option in bash and part of the configuration for the python scripts.
-
+# Logging
+Each script will write to a log file which is **/var/log/<script-name>.log**, it will rely on **logrotate** to rotate it log file. The name and location of the log file can be adjusted on your need, it part of the configurable option in bash and part of the configuration for the python scripts.
 
 
 ## Feedback
