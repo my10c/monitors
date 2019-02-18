@@ -13,7 +13,7 @@ The scripts has 3 methods to alerting:
 These will need to be edited and adjusted, the start of the items to be configured is indicated with the **# start Configuration** up to the **# end Configuration**
 
 ## Python scripts
-These requires a configuration file, the default location of the configuration file is **/etc/bao/<script-name.cfg>** or us the **-C** flag to override the default configuration file.
+These requires a configuration file, the default location of the configuration file is **/etc/bao/<script-name.cfg>** or use the **-C** flag to override the default configuration file.
 
 
 **enjoy**
