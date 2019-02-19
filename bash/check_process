@@ -30,9 +30,9 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #*
-#* File			:	check_vpn
+#* File			:	check_process
 #*
-#* Description	:	check if the given vpn is up and ping the server side if an ip was given
+#* Description	:	script to check if the given process name is running and has the correct count
 #*
 #* Author	:	Luc Suryo <luc@badassops.com>
 #*
@@ -51,7 +51,7 @@ _copyright="Copyright 2019 - $(date "+%Y") (c) Badassops LLC"
 _license='License BSD, http://www.freebsd.org/copyright/freebsd-license.html'
 _version='0.1'
 _email='luc@badassops.com'
-_summary='Script to check if the given vpn is up and ping the server side if an ip was given.'
+_summary='Script to check if the given process name is running and has the correct count.'
 _cancelled="OK : Process has been cancelled on your request."
 _info="$_program $_version\n$_copyright\n$_license\nWritten by $_author <$_email>\n$_summary\n"
 
@@ -77,12 +77,10 @@ _hostname="${HOSTNAME%%.*}"
 _work_dir=/var/tmp/"$_program"-"$USER"
 _lockfile="$_work_dir/$_program".LOCK
 _echo_flag='-e'
-_my_inf=
-_my_ip=
-_my_vpn=
-_my_count=5
-_my_timeout=2
-_my_retry=2
+_my_proc=
+_my_min=1
+_my_max=1
+_counter=0
 
 # start Configuration
 # Log file
@@ -92,28 +90,26 @@ _log_file=/var/log/${_program}.log
 _alert_email=0
 _email_to=
 _email_from=
-_email_subject="[$_state_critical_msg $_program on host $_hostname]"
-_email_msg="VPN DOWN on server $_hostname"
+_email_subject="[$_state_critical_msg $_program on host  $_hostname]"
+_email_msg="Process down or count error"
 _email_file="$_work_dir"/"$_program".mail
 
 # settings for slack
 _alert_slack=0
 _slack_cmd=/usr/local/sbin/send_to_slack
 _slack_cfg=/etc/bao/slack
-_slack_msg="VPN DOWN on server $_hostname"
+_slack_msg="Process down or count error"
 
 # settings for pager duty
 _alert_pd=0
 _pd_cmd=/usr/local/sbin/send_to_pagerduty
 _pd_cfg=/etc/bao/pagerduty
 _pd_tag="$_program"
-_pd_description="VPN DOWN"
-_pd_detail="VPN DOWN on server $_hostname"
+_pd_description="Process down"
+_pd_detail="Process down or count error"
 # end Configuration
 
 # commands used
-_ip_cmd=/bin/ip
-_ping_cmd=/bin/pin
 
 # Set interrupt handler
 trap inthandler 1 2 3 4 5 9 10 12 15 23 24 25
@@ -130,7 +126,7 @@ function clean_up() {
 }
 
 function echo_and_log() {
-	echo $_echo_flag "$*" | tee -a $_log_file
+	echo $_echo_flag "$*" #| tee -a $_log_file
 	return 0
 }
 
@@ -139,19 +135,14 @@ function help() {
 	echo_and_log "$_info"
 	echo_and_log "Usage : $_program [-h]  [ option ... ]"
 	echo_and_log " Options:"
-	echo_and_log "   -h                      # this help page."
-	echo_and_log "   -i interface name       # the tunnel interface name (required)"
-	echo_and_log "   -n name of vpn          # this will be use in the alert message"
-	echo_and_log "   -I ip server side       # the ip server side, only if pingable"
-	echo_and_log "   -c amount time to try   # try count for ping"
-	echo_and_log "   -t seconds              # timeout for ping"
-	echo_and_log "   -r count                # retry count before its a error"
-	echo_and_log "   -v                      # Show version."
+	echo_and_log " -h this help page."
+	echo_and_log " -p value, name of process to check"
+	echo_and_log " -c value:value, minimal:maximal process count"
+	echo_and_log " -v Show version."
 	echo_and_log "\n    Notes:"
-	echo_and_log " Default name of vpn is same as given interface if omitted."
-	echo_and_log " Default count ${_my_count:-no default}"
-	echo_and_log " Default timeout ${_my_timeout:-no default}"
-	echo_and_log " Default retry ${_my_retry:-no default}"
+	echo_and_log "The more exact process name the better."
+	echo_and_log " Default min process count ${_my_min:-no default}"
+	echo_and_log " Default max process count ${_my_max:-no default}"
 	clean_up
 	exit $1
 }
@@ -161,7 +152,7 @@ function send_mail() {
 	local _result=0
 	local _cur_time=$(date "+%H:%M %Y-%m-%d")
 
-	_email_msg="$_email_msg : $_my_vpn"
+	_email_msg="$_email_msg process $_my_proc, count is $_counter need $_my_count"
 
 	echo $_echo_flag "From: $_email_to"							> $_email_file
 	echo $_echo_flag "To: $_email_from"								>> $_email_file
@@ -180,7 +171,7 @@ function send_mail() {
 function send_slack() {
 	(( $_alert_slack == 0 )) && return 0
 	if [[ -x $_slack_cmd ]] ; then
-		$_slack_cmd -C $_slack_cfg -m "$_slack_msg : $_my_vpn"
+		$_slack_cmd -C $_slack_cfg -m "$_slack_msg process $_my_proc, count is $_counter"
 		return $?
 	fi
 	return 1
@@ -190,37 +181,22 @@ function send_pd() {
 	(( $_alert_pd == 0 )) && return 0
 	if [[ -x $_pd_cmd ]] ; then
 		$_pd_cmd -C $_pd_cfg --tag "$_pd_tag" --description "$_pd_description" \
-			--detail "$_pd_detail : $_my_vpn"
+			--detail "$_pd_detail process $_my_proc, count is $_counter"
 		return $?
 	fi
 	return 1
 }
 
 function get_given_options() {
-	local _option_inf=0 ; local _option_ip=0 ; local _option_name=0
-	local _option_count=0 ; local _option_timeout=0 ; local _option_retry=0
+	local _option_count=0 ; local _option_proc=0
 	local _has_error=0
 	while [[ -n "$1" ]]
 	do
 		case "$1" in
-			 '-i'|'--interface')
-					_my_inf="$2" ; shift ; let _option_inf++ ;;
-
-			 '-I'|'--ip')
-					_my_ip="$2" ; shift ; let _option_ip++ ;;
-
+			 '-p'|'--proc')
+					_my_proc="$2" ; shift ; let _option_proc++ ;;
 			 '-c'|'--count')
 					_my_count="$2" ; shift ; let _option_count++ ;;
-
-			 '-n'|'--name')
-					_my_vpn="$2" ; shift ; let _option_name++ ;;
-
-			 '-t'|'--timeout')
-					_my_timeout="$2" ; shift ; let _option_timeout++ ;;
-
-			 '-r'|'--retry')
-					_my_retry="$2" ; shift ; let _option_retry++ ;;
-
 			'-v'|'--version') echo $_echo_flag "$_version" ; exit $_state_ok ; ;;
 
 			*)		help $_state_ok ;; 	# Which includes -h and --help
@@ -228,14 +204,13 @@ function get_given_options() {
 		shift
 	done
 
-	(( $_option_inf != 1 )) && echo_and_log "\n\t: -i either missing or given more then once." && let _has_error++
-	(( $_option_name > 1 )) && echo_and_log "\n\t: -n can only be given once." && let _has_error++
-	(( $_option_ip > 1 )) && echo_and_log "\n\t: -I can only be given once." && let _has_error++
+	(( $_option_proc != 1 )) && echo_and_log "\n\t: -p missing or given more than once." && let _has_error++
 	(( $_option_count > 1 )) && echo_and_log "\n\t: -c can only be given once." && let _has_error++
-	(( $_option_timeout > 1 )) && echo_and_log "\n\t: -t can only be given once." && let _has_error++
-	(( $_option_retry > 1 )) && echo_and_log "\n\t: -r can only be given once." && let _has_error++
 	(( $_has_error != 0 )) && help $_state_critical
-	(( $_option_name == 0 )) && _my_vpn=$_my_inf
+	if (( $_option_count == 1 )) ; then
+		_my_min=${_my_count%:*}
+		_my_max=${_my_count#*:}
+	fi
 	return 0
 }
 
@@ -274,27 +249,19 @@ function send_alert() {
 	return 0
 }
 
-function ping_server() {
-	$_ping_cmd -q -I $_my_inf -t $_my_timeout -c $_my_count $_my_ip > /dev/null 2>&1
-	return $?
-}
-
 function check_it() {
-	local _result=$_state_ok
-	local _cnt=0
-	while (( $_cnt < $_my_retry )) ;
+	local _result=0
+	for _proc_cmdline in $(ls -1d /proc/[0-9]*/cmdline)
 	do
-		$_ip_cmd addr show $_my_inf > /dev/null 2>&1
-		_result=$?
-		if (( $_result == 0 )) ; then
-			if [[ "$_my_ip" != "" ]] ; then
-				ping_server
-				_result=$(( $_result + $? ))
-			fi
+		if [[ -f ${_proc_cmdline} ]] ; then
+			cat ${_proc_cmdline} | xargs -0 | egrep --silent "^$_my_proc"
+			(( $? == 0 )) && let _counter++
 		fi
-		(( $_result == $_state_ok )) && break
-		let _cnt++
 	done
+
+	if (( $_counter < $_my_min )) || (( $_counter > $_my_max )) ; then
+		_result=$_state_critical
+	fi
 	return $_result
 }
 
@@ -305,9 +272,8 @@ function main() {
 		 isRoot
 		(( $? != 0 )) && echo $_echo_flag "$_info" && exit 255
 	fi
-	get_given_options $@
+	get_given_options "$@"
 	(( $_need_lock == 1 )) && check_running
-
 	check_it
 	_var_exit=$?
 
@@ -315,10 +281,10 @@ function main() {
 	trap 1 2 3 4 5 9 10 12 15 23 24 25
 	case $_var_exit
 	in
-		0)	echo_and_log "$_program $_state_ok_msg : VPN is up"  ;;
-		*)	echo_and_log "$_program $_state_critical_msg : VPN does not seems to be up"
+		0)	echo_and_log "$_program $_state_ok_msg : process $_my_proc count is $_counter" ;;
+		*)	echo_and_log "$_program $_state_critical_msg : process $_my_proc count is $_counter need $_my_count"
 			send_alert
-			_var_exit=$_state_critical $;;
+			_var_exit=$_state_critical ;;
 	esac
 	exit $_var_exit
 }

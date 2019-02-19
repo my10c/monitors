@@ -32,17 +32,17 @@
 #*
 #* File			:	check_app_ping
 #*
-#* Description	:	check given url(s) and expecting a 'pong' in the content is things are OK
+#* Description	:	check given url(s) and expecting a 'pong' in the content if things are OK
 #*
 #* Author	:	Luc Suryo <luc@badassops.com>
 #*
 #* Version	:	0.1
 #*
-#* Date		:
+#* Date		:	Feb 18, 2019
 #*
 #* History	:
 #* 		Date:			Author:				Info:
-#*						LIS					First Release to public
+#*		Feb 18, 2019	LIS					First Release to public
 #*
 
 _program="${0##*/}"
@@ -51,9 +51,16 @@ _copyright="Copyright 2019 - $(date "+%Y") (c) Badassops LLC"
 _license='License BSD, http://www.freebsd.org/copyright/freebsd-license.html'
 _version='0.1'
 _email='luc@badassops.com'
-_summary='Check given url(s) and expecting a 'pong' in the content is things are OK'
+_summary='Check given url(s) and expecting a 'pong' in the content if things are OK'
 _cancelled="OK : Process has been cancelled on your request."
-_info="$_program $_version\n$_copyright\n$_license\n\nWritten by $_author <$_email>\n$_summary\n"
+_info="$_program $_version\n$_copyright\n$_license\nWritten by $_author <$_email>\n$_summary\n"
+
+# check as soon as possible
+if [[ "$(uname -s)" != "Linux" ]] ; then
+	echo -e "$_info"
+	echo -e "This script can only be used on a Linux system, script aborted."
+	exit 0
+fi
 
 # defined return values
 _state_ok=0 ; _state_ok_msg='OK'
