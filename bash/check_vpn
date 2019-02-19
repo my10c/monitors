@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+#
+# BSD 3-Clause License
+#
+# Copyright (c) 2019, © Badassops LLC / Luc Suryo
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#*
+#* File			:
+#*
+#* Description	:
+#*
+#* Author	:	Luc Suryo <luc@badassops.com>
+#*
+#* Version	:	0.1
+#*
+#* Date		:
+#*
+#* History	:
+#* 		Date:			Author:				Info:
+#*						LIS					First Release to public
+#*
+
+_program="${0##*/}"
+_author='Luc Suryo'
+_copyright="Copyright 2019 - $(date "+%Y") (c) Badassops LLC"
+_license='License BSD, http://www.freebsd.org/copyright/freebsd-license.html'
+_version='0.1'
+_email='luc@badassops.com'
+_summary=''
+_cancelled="OK : Process has been cancelled on your request."
+_info="$_program $_version\n$_copyright\n$_license\n\nWritten by $_author <$_email>\n$_summary\n"
+
+# defined return values
+_state_ok=0 ; _state_ok_msg='OK'
+_state_critical=2 ; _state_critical_msg='CRITICAL'
+
+# Whatever script needs to be run as root and exclusive lock
+_need_root=1
+_need_lock=1
+
+# working variables
+_opid=$$
+_hostname="${HOSTNAME%%.*}"
+# allowing multiple user to run the script
+_work_dir=/var/tmp/"$_program"-"$USER"
+_lockfile="$_work_dir/$_program".LOCK
+_echo_flag='-e'
+_my_inf=
+_my_ip=
+_my_vpn=
+_my_count=5
+_my_timeout=2
+_my_retry=2
+
+# start Configuration
+# Log file
+_log_file=/var/log/${_program}.log
+
+# mail variables
+_alert_email=0
+_email_to=
+_email_from=
+_email_subject="[$_state_critical_msg $_program on host  $_hostname]"
+_email_msg=
+_email_file="$_work_dir"/"$_program".mail
+
+# settings for slack
+_alert_slack=0
+_slack_cmd=/usr/local/sbin/send_to_slack
+_slack_cfg=/etc/bao/slack
+_slack_msg="VPN DOWN on server $_hostname"
+
+# settings for pager duty
+_alert_pd=0
+_pd_cmd=/usr/local/sbin/send_to_pagerduty
+_pd_cfg=/etc/bao/pagerduty
+_pd_tag="$_program"
+_pd_description="VPN DOWN"
+_pd_detail="VPN DOWN on server $_hostname"
+# end Configuration
+
+# commands used
+_ip_cmd=/bin/ip
+_ping_cmd=/bin/pin
+
+# Set interrupt handler
+trap inthandler 1 2 3 4 5 9 10 12 15 23 24 25
+
+function inthandler() {
+	clean_up
+	echo $_echo_flag "$_cancelled"
+	exit $_state_ok
+}
+
+function clean_up() {
+	rm -f "$_lockfile" > /dev/null 2>&1
+	return 0
+}
+
+function echo_and_log() {
+	echo $_echo_flag "$*" | tee -a $_log_file
+	return 0
+}
+
+function help() {
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	echo_and_log "$_info"
+	echo_and_log "Usage : $_program [-h]  [ option ... ]"
+	echo_and_log " Options:"
+	echo_and_log "   -h                      # this help page."
+	echo_and_log "   -i interface name       # the tunnel interface name (required)"
+	echo_and_log "   -n name of vpn          # this will be use in the alert message"
+	echo_and_log "   -I ip server side       # the ip server side, only if pingable"
+	echo_and_log "   -c amount time to try   # try count for ping"
+	echo_and_log "   -t seconds              # timeout for ping"
+	echo_and_log "   -r count                # retry count before its a error"
+	echo_and_log "   -v                      # Show version."
+	echo_and_log "\n    Notes:"
+	echo_and_log " Default name of vpn is same as given interface if omitted."
+	echo_and_log " Default count ${_my_count:-no default}"
+	echo_and_log " Default timeout ${_my_timeout:-no default}"
+	echo_and_log " Default retry ${_my_retry:-no default}"
+	clean_up
+	exit $1
+}
+
+function send_mail() {
+	(( $_alert_email  == 0 )) && return 0
+	local _result=0
+	local _cur_time=$(date "+%H:%M %Y-%m-%d")
+
+	echo $_echo_flag "From: $_email_to"							> $_email_file
+	echo $_echo_flag "To: $_email_from"								>> $_email_file
+	echo $_echo_flag "Subject: $_email_subject"						>> $_email_file
+	echo $_echo_flag "Content-Type: text/plain; charset=us-ascii"   >> $_email_file
+	echo $_echo_flag "Content-Transfer-Encoding: 7bit\n\n"			>> $_email_file
+	echo $_echo_flag "$_cur_time: $_email_msg"						>> $_email_file
+	echo $_echo_flag "\n\n----------------------"					>> $_email_file
+	echo $_echo_flag "Operations Team"								>> $_email_file
+	/usr/sbin/sendmail -t < $_email_file
+	_result=$(( $? + $_result ))
+	rm -f $_email_file
+	return $_result
+}
+
+function send_slack() {
+	(( $_alert_slack == 0 )) && return 0
+	if [[ -x $_slack_cmd ]] ; then
+		$_slack_cmd -C $_slack_cfg -m "$_slack_msg : $_my_vpn"
+		return $?
+	fi
+	return 1
+}
+
+function send_pd() {
+	(( $_alert_pd == 0 )) && return 0
+	if [[ -x $_pd_cmd ]] ; then
+		$_pd_cmd -C $_pd_cfg --tag "$_pd_tag" --description "$_pd_description" \
+			--detail "$_pd_detail : $_my_vpn"
+		return $?
+	fi
+	return 1
+}
+
+function get_given_options() {
+	local _option_inf=0 ; local _option_ip=0 ; local _option_name=0
+	local _option_count=0 ; local _option_timeout=0 ; local _option_retry=0
+	local _has_error=0
+	while [[ -n "$1" ]]
+	do
+		case "$1" in
+			 '-i'|'--interface')
+					_my_inf="$2" ; shift ; let _option_inf++ ;;
+
+			 '-I'|'--ip')
+					_my_ip="$2" ; shift ; let _option_ip++ ;;
+
+			 '-c'|'--count')
+					_my_count="$2" ; shift ; let _option_count++ ;;
+
+			 '-n'|'--name')
+					_my_vpn="$2" ; shift ; let _option_name++ ;;
+
+			 '-t'|'--timeout')
+					_my_timeout="$2" ; shift ; let _option_timeout++ ;;
+
+			 '-r'|'--retry')
+					_my_retry="$2" ; shift ; let _option_retry++ ;;
+
+			'-v'|'--version') echo $_echo_flag "$_version" ; exit $_state_ok ; ;;
+
+			*)		help $_state_ok ;; 	# Which includes -h and --help
+		esac
+		shift
+	done
+
+	(( $_option_inf != 1 )) && echo_and_log "\n\t: -i either missing or given more then once." && let _has_error++
+	(( $_option_name > 1 )) && echo_and_log "\n\t: -n can only be given once." && let _has_error++
+	(( $_option_ip > 1 )) && echo_and_log "\n\t: -I can only be given once." && let _has_error++
+	(( $_option_count > 1 )) && echo_and_log "\n\t: -c can only be given once." && let _has_error++
+	(( $_option_timeout > 1 )) && echo_and_log "\n\t: -t can only be given once." && let _has_error++
+	(( $_option_retry > 1 )) && echo_and_log "\n\t: -r can only be given once." && let _has_error++
+	(( $_has_error != 0 )) && help $_state_critical
+	(( $_option_name == 0 )) && _my_vpn=$_my_inf
+	return 0
+}
+
+function isRoot() {
+	if (($(id -u) != 0)) ; then
+		echo $_echo_flag "\n\t*** $_program: this script must be run as the user root ***\n" >&2
+		return 1
+	fi
+	return 0
+}
+
+function check_running() {
+	if [[ -f "$_lockfile" ]]; then
+		/bin/ps -p $(cat $_lockfile) > /dev/null 2>&1
+		if (( $? == 0 )) ; then
+			echo_and_log "*** There is already a $_program running, execution has been terminated. ***"
+			echo_and_log "*** If this is an error please remove the lock file: $_lockfile ***"
+			exit $_state_ok
+		else
+			echo_and_log "*** Lock file found and deleted since there is no process with that pid ***"
+			rm -rf $_lockfile > /dev/null 2>&1
+		fi
+	fi
+	if ! mkdir -p "$_work_dir" > /dev/null 2>&1 ; then
+		echo_and_log "*** $_state_critical_msg: Unable to create file working directory $_work_dir! ***"
+		exit $_state_critical
+	fi
+	echo "$_opid" > "$_lockfile"
+	return 0
+}
+
+function send_alert() {
+	send_mail
+	send_slack
+	send_pd
+	return 0
+}
+
+function ping_server() {
+	$_ping_cmd -q -I $_my_inf -t $_my_timeout -c $_my_count $_my_ip > /dev/null 2>&1
+	return $?
+}
+
+function check_it() {
+	local _result=0
+	local _cnt=0
+	while (( $_cnt < $_my_retry )) ;
+	do
+		$_ip_cmd addr show $_my_inf > /dev/null 2>&1
+		_result=$?
+		if (( $_result == 0 )) ; then
+			if [[ "$_my_ip" != "" ]] ; then
+				ping_server
+				_result=$(( $_result + $? ))
+			fi
+		fi
+		(( $_result == 0 )) && break
+		let _cnt++
+	done
+	return $_result
+}
+
+function main() {
+	local _var_exit=$_state_ok
+
+	if (( $_need_root == 1 )) ; then
+		 isRoot
+		(( $? != 0 )) && echo $_echo_flag "$_info" && exit 255
+	fi
+	get_given_options $@
+	(( $_need_lock == 1 )) && check_running
+
+	check_it
+	_var_exit=$?
+
+	clean_up
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	case $_var_exit
+	in
+		0)	echo_and_log "$_program $_state_ok_msg : VPN is up"  ;;
+		*)	echo_and_log "$_program $_state_critical_msg : VPN does not seems to be up"
+			send_alert
+			_var_exit=$_state_critical $;;
+	esac
+	exit $_var_exit
+}
+main "$@"

@@ -32,6 +32,9 @@ The script will return a **0** if the check passed and **2** if it failed. And t
 # Logging
 Each script will write to a log file which is **/var/log/<script-name>.log**, it will rely on **logrotate** to rotate it log file. The name and location of the log file can be adjusted on your need, it part of the configurable option in bash and part of the configuration for the python scripts.
 
+# Need Root and Lock
+Because the scripts writes log under the directory **/var/log**, it will required to be run as root. Changing should be trivial; things like set log file and/or permission.
+For lock, most of the time you do not want the script to be execute while an other is running, this too can be adjusted as needed, a trivial change.
 
 ## Feedback
 Feedback, bug report and requests for new scripts welcome...
